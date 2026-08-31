@@ -66,6 +66,9 @@ class LLMClient:
             except Exception as e:
                 if attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAY_BASE ** (attempt + 1)
+                    # Extra delay for rate limit errors
+                    if '429' in str(e):
+                        delay = max(delay, 15)
                     print(f"    [LLM] Attempt {attempt+1} failed: {e}. Retrying in {delay}s...")
                     time.sleep(delay)
                 else:
