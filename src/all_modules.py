@@ -17,8 +17,11 @@ from typing import Optional
 # validate_compile.py
 # ═══════════════════════════════════════════════════════════════
 
-UVM_HOME = "/mnt/apps/public/COE/mg_apps/questa2026.1/questasim/verilog_src/uvm-1.1d/src"
-UVM_DPI  = "/mnt/apps/public/COE/mg_apps/questa2026.1/questasim/uvm-1.1d/linux_x86_64/uvm_dpi"
+try:
+    from config import UVM_HOME, UVM_DPI
+except ImportError:
+    UVM_HOME = "/mnt/apps/public/COE/mg_apps/questa2026.1/questasim/verilog_src/uvm-1.1d/src"
+    UVM_DPI  = "/mnt/apps/public/COE/mg_apps/questa2026.1/questasim/uvm-1.1d/linux_x86_64/uvm_dpi"
 
 
 def validate_compile(output_dir: str, proto_spec: dict) -> list:

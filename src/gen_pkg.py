@@ -12,6 +12,8 @@ SV_12_RULES_NOTE = """
 """
 
 
+from sv_validator import validate_enum, shorten_sv_name
+
 def gen_pkg(proto_spec: dict, output_dir: str, llm) -> str:
     """Generate *_pkg.sv from protocol spec."""
     name     = proto_spec['sv_name']
@@ -80,6 +82,7 @@ package {name}_pkg;
 endpackage : {name}_pkg
 `endif
 """
+    content = validate_enum(content)
     return content
 
 

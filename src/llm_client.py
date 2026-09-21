@@ -20,8 +20,13 @@ RETRY_DELAY_BASE    = 2      # seconds, exponential backoff
 
 class LLMClient:
     def __init__(self):
-        self.anthropic_key = os.environ.get('ANTHROPIC_API_KEY', '')
-        self.gemini_key    = os.environ.get('GEMINI_API_KEY', '')
+        try:
+            from config import GEMINI_API_KEY, ANTHROPIC_API_KEY
+            self.anthropic_key = ANTHROPIC_API_KEY or os.environ.get('ANTHROPIC_API_KEY', '')
+            self.gemini_key    = GEMINI_API_KEY    or os.environ.get('GEMINI_API_KEY', '')
+        except ImportError:
+            self.anthropic_key = os.environ.get('ANTHROPIC_API_KEY', '')
+            self.gemini_key    = os.environ.get('GEMINI_API_KEY', '')
 
         # Determine backend
         if self.anthropic_key:
@@ -68,7 +73,7 @@ class LLMClient:
                     delay = RETRY_DELAY_BASE ** (attempt + 1)
                     # Extra delay for rate limit errors
                     if '429' in str(e):
-                        delay = max(delay, 15)
+                        delay = max(delay, 30)
                     print(f"    [LLM] Attempt {attempt+1} failed: {e}. Retrying in {delay}s...")
                     time.sleep(delay)
                 else:
@@ -184,6 +189,7 @@ Respond with JSON:
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
+            time.sleep(2)  # Gemini rate limit protection
             return data['candidates'][0]['content']['parts'][0]['text']
 
     def _call_opencode(self, prompt: str) -> str:

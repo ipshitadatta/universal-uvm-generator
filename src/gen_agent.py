@@ -8,6 +8,7 @@ Template handles: all UVM boilerplate.
 """
 
 from gen_scoreboard import gen_scoreboard_class
+from sv_validator  import clean_sv_body, clean_sv_file, validate_enum
 from gen_coverage   import gen_coverage_class
 
 
@@ -337,7 +338,10 @@ Max 40 lines."""
 
     # Apply 12-rule validation
     result = _validate_sv_body(result, proto_spec)
-    return _indent(result, 6)
+    cleaned, removed = clean_sv_body(result, proto_spec)
+    if removed:
+        print(f"    [CLEAN] Removed {len(removed)} prose lines from driver body")
+    return _indent(cleaned, 6)
 
 
 def _gen_monitor_body(proto_spec: dict, llm) -> str:
@@ -363,8 +367,10 @@ Max 20 lines."""
     result = llm.call(prompt, max_tokens=400)
     if not result:
         return _fallback_monitor_body(proto_spec)
-
-    return _indent(result, 8)
+    cleaned, removed = clean_sv_body(result, proto_spec)
+    if removed:
+        print(f"    [CLEAN] Removed {len(removed)} prose lines from monitor body")
+    return _indent(cleaned, 8)
 
 
 def _gen_test_sequences(proto_spec: dict, llm) -> str:
@@ -387,8 +393,10 @@ Return ONLY the two class definitions."""
     result = llm.call(prompt, max_tokens=800)
     if not result:
         return _fallback_sequences(proto_spec)
-
-    return result
+    cleaned, removed = clean_sv_body(result, proto_spec)
+    if removed:
+        print(f"    [CLEAN] Removed {len(removed)} prose lines from sequences")
+    return cleaned
 
 
 def _fallback_driver_body(proto_spec: dict) -> str:
