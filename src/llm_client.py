@@ -29,23 +29,16 @@ class LLMClient:
             self.gemini_key    = os.environ.get('GEMINI_API_KEY', '')
 
         # Determine backend
+        self.groq_key = os.environ.get('GROQ_API_KEY', '')
+        try:
+            from config import GROQ_API_KEY
+            self.groq_key = GROQ_API_KEY or self.groq_key
+        except (ImportError, NameError):
+            pass
         if self.anthropic_key:
             self.backend = 'claude'
-        elif self.gemini_key:
-            self.backend = 'gemini'
         else:
-            # Check opencode availability
-            try:
-                result = subprocess.run(
-                    ['opencode', '--version'],
-                    capture_output=True, timeout=5
-                )
-                self.backend = 'opencode'
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                print("[WARN] No LLM API keys found and opencode not available.")
-                print("       Set ANTHROPIC_API_KEY or GEMINI_API_KEY in environment.")
-                print("       Or install opencode: curl -fsSL https://opencode.ai/install | bash")
-                self.backend = 'template_only'
+            self.backend = 'opencode'
 
         # Error signature cache: (error_code, file_type) → fix_patch
         self._error_cache = {}
@@ -62,6 +55,8 @@ class LLMClient:
             try:
                 if self.backend == 'claude':
                     return self._call_claude(prompt, system, max_tokens)
+                elif self.backend == 'groq':
+                    return self._call_groq(prompt, system, max_tokens)
                 elif self.backend == 'gemini':
                     return self._call_gemini(prompt, system, max_tokens)
                 elif self.backend == 'opencode':
@@ -78,6 +73,12 @@ class LLMClient:
                     time.sleep(delay)
                 else:
                     print(f"    [LLM] All {MAX_RETRIES} attempts failed: {e}")
+                    if self.backend != 'opencode':
+                        print(f"    [LLM] Falling back to opencode...")
+                        try:
+                            return self._call_opencode(prompt)
+                        except Exception as oc_e:
+                            print(f"    [LLM] opencode also failed: {oc_e}")
                     return ''
 
         return ''
@@ -187,26 +188,57 @@ Respond with JSON:
             url, data=payload,
             headers={'Content-Type': 'application/json'}
         )
+        time.sleep(5)  # pre-call Gemini rate limit protection
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
-            time.sleep(2)  # Gemini rate limit protection
             return data['candidates'][0]['content']['parts'][0]['text']
+
+    def _call_groq(self, prompt: str, system: str, max_tokens: int) -> str:
+        """Call Groq API — free tier, fast, good at code."""
+        url = 'https://api.groq.com/openai/v1/chat/completions'
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload = json.dumps({
+            "model": "llama3-70b-8192",
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.2
+        }).encode()
+        req = urllib.request.Request(url, data=payload, headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.groq_key}',
+            'HTTP-Referer': 'https://github.com/ipshitadatta/universal-uvm-generator',
+            'X-Title': 'UVMGen',
+            'User-Agent': 'python-urllib/3.9'
+        })
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+            return data['choices'][0]['message']['content']
 
     def _call_opencode(self, prompt: str) -> str:
         """Call opencode CLI (free, no API key needed)."""
-        # Write prompt to temp file to avoid shell quoting issues (CAT-46518 lesson)
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write(prompt)
             tmp = f.name
-
         try:
             result = subprocess.run(
-                ['opencode', 'run', f'$(cat {tmp})',
-                 '--model', 'opencode/deepseek-v4-flash-free'],
-                capture_output=True, text=True, timeout=60
+                [os.path.expanduser('~/.opencode/bin/opencode'),
+                 'run', open(tmp).read()],
+                capture_output=True, text=True, timeout=120
             )
-            return result.stdout.strip()
+            output = result.stdout.strip()
+            # opencode includes shell commands and prompts — extract just the text response
+            lines = output.split('\n')
+            # Skip lines starting with $, >, or blank
+            response_lines = [l for l in lines
+                            if l.strip()
+                            and not l.strip().startswith('$')
+                            and not l.strip().startswith('>')
+                            and not l.strip().startswith('build')]
+            return '\n'.join(response_lines)
         finally:
             os.unlink(tmp)
 

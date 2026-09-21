@@ -177,3 +177,10 @@ def _is_prose_line(line: str) -> bool:
         if pattern.search(stripped):
             return True
     return False
+
+
+def strip_markdown_fences(content: str) -> str:
+    import re
+    content = re.sub(r"```\w*\n?", "", content)
+    content = re.sub(r"```", "", content)
+    return content

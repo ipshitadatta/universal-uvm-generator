@@ -6,6 +6,8 @@ gen_env.py        — tb_top.sv wiring DUT to UVM
 gen_scripts.py    — run.sh and regress.sh
 """
 
+import re
+
 # ═══════════════════════════════════════════════════════════════
 # gen_scoreboard.py
 # ═══════════════════════════════════════════════════════════════
@@ -215,6 +217,12 @@ Max 30 lines."""
     result = llm.call(prompt, max_tokens=600)
     if not result:
         return "  // TODO: add SVA properties for " + proto_spec['name']
+
+    # Strip markdown code fences (``` / ```sv) that the LLM may wrap the
+    # property bodies in. A bare ``` line is parsed by QuestaSim as a leading
+    # backtick macro reference, raising vlog-2163 ("Macro `property undefined")
+    # and cascading into vlog-13205 by breaking the enclosing module scope.
+    result = re.sub(r'(?ms)^[ \t]*```[A-Za-z]*[ \t]*$', '', result).strip()
 
     return result
 

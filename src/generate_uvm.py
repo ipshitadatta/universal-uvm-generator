@@ -76,5 +76,7 @@ def generate_uvm_environment(proto_spec: dict, output_dir: str, llm) -> list:
 
 def _write_file(path: str, content: str):
     """Write file safely using Python open() — never shell redirection."""
+    from sv_validator import strip_markdown_fences
+    content = strip_markdown_fences(content)
     with open(path, 'w') as f:
         f.write(content)

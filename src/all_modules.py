@@ -41,15 +41,14 @@ def validate_compile(output_dir: str, proto_spec: dict) -> list:
 
     errors = []
     compile_steps = [
-        ('pkg',    [f'../rtl/{name}_pkg.sv']),
-        ('sva',    [f'../assertions/{name}_sva.sv',
-                    '+incdir+../rtl']),
-        ('tb',     [f'{UVM_HOME}/uvm_pkg.sv',
+        ('all',    [f'../rtl/{name}_pkg.sv',
+                    f'../assertions/{name}_sva.sv',
+                    f'{UVM_HOME}/uvm_pkg.sv',
                     f'../tb/{name}_if.sv',
                     f'../tb/{name}_tb_pkg.sv',
                     f'../tb/tb_top.sv',
-                    f'+incdir+../tb',
                     f'+incdir+../rtl',
+                    f'+incdir+../tb',
                     f'+incdir+{UVM_HOME}']),
     ]
 
