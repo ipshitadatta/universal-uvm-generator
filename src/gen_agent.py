@@ -306,7 +306,23 @@ def _gen_seq_item_fields(proto_spec: dict, llm) -> str:
             else:
                 fields.append(f"    logic [{w}-1:0]               {sig_name.lower()}; // response")
 
-    return '\n'.join(fields) if fields else '    rand logic [31:0] data;\n    rand logic [15:0] addr;'
+    # Always include at minimum: addr, data, id fields
+    if not fields:
+        fields = [
+            '    rand logic [31:0] data;',
+            '    rand logic [31:0] addr;',
+        ]
+    # Add generic addr/data fields if no fields found
+    if not fields:
+        # Use signal names from proto_spec channels
+        all_signals = []
+        for ch in proto_spec.get('channels', []):
+            all_signals.extend(ch.get('signals', {}).keys())
+        for sig in all_signals[:8]:
+            fields.append(f'    rand logic [31:0] {sig.lower()};')
+    if not fields:
+        fields = ['    rand logic [31:0] data;', '    rand logic [31:0] addr;']
+    return '\n'.join(fields)
 
 
 def _gen_driver_body(proto_spec: dict, llm) -> str:
@@ -320,17 +336,10 @@ def _gen_driver_body(proto_spec: dict, llm) -> str:
         for ch in master_channels[:3]
     ])
 
-    prompt = f"""Protocol: {proto_spec['name']}
-Master channels:
-{ch_summary}
-
-Write the SystemVerilog body of a UVM driver task called _drive().
-The task receives a seq_item and drives the DUT via vif signals.
-Use @(posedge vif.clk) for synchronization — no #delay (Rule 11).
-Use valid/ready handshake where applicable.
-Include a timeout watchdog (200 cycles max).
-Return ONLY the task body lines (not the task declaration).
-Max 40 lines."""
+    prompt = f"""Write _drive() task body for {proto_spec['name']} driver.
+Channels: {ch_summary}
+Use @(posedge vif.clk), valid/ready handshake, 200-cycle timeout.
+Return ONLY task body lines. Max 20 lines."""
 
     result = llm.call(prompt, max_tokens=600)
     if not result:
@@ -378,17 +387,10 @@ def _gen_test_sequences(proto_spec: dict, llm) -> str:
     txns = proto_spec.get('transactions', [])
     name = proto_spec['sv_name']
 
-    prompt = f"""Protocol: {proto_spec['name']}
-Transactions: {[t['name'] for t in txns]}
-Scoreboard strategy: {proto_spec.get('scoreboard_strategy', '')}
-
-Write two UVM sequence classes in SystemVerilog:
-1. {name}_sanity_seq: write then read one address, verify data
-2. {name}_random_seq: 20 random transactions
-
-Both extend {name}_base_seq.
-Use `uvm_object_utils, randomize() with constraints.
-Return ONLY the two class definitions."""
+    prompt = f"""Write two UVM sequence classes for {proto_spec['name']}.
+1. {name}_sanity_seq extends {name}_base_seq: 2 transactions
+2. {name}_random_seq extends {name}_base_seq: 20 random transactions
+Use `uvm_object_utils. Return ONLY class definitions."""
 
     result = llm.call(prompt, max_tokens=800)
     if not result:
@@ -403,15 +405,23 @@ def _fallback_driver_body(proto_spec: dict) -> str:
     """Template fallback if LLM fails."""
     channels = proto_spec.get('channels', [])
     name = proto_spec['sv_name']
+    # Assert ready signals on slave-to-master channels first
     lines = [
         "      int timeout = 0;",
         "      @(posedge vif.clk);",
     ]
+    # Drive ready=1 on all response channels (slave_to_master)
+    for ch in channels:
+        if ch.get('direction') != 'slave_to_master':
+            continue
+        for sig, info in ch.get('signals', {}).items():
+            if info.get('role') == 'ready':
+                lines.append(f"      vif.{sig.lower()} <= 1'b1;  // keep ready high to accept responses")
+    # Drive valid on request channels (master_to_slave)
     for ch in channels:
         if ch.get('direction') != 'master_to_slave':
             continue
-        sigs = ch.get('signals', {})
-        for sig, info in sigs.items():
+        for sig, info in ch.get('signals', {}).items():
             if info.get('role') == 'valid':
                 lines.append(f"      vif.{sig.lower()} <= 1'b1;")
     lines += [

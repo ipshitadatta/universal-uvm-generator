@@ -1,3 +1,4 @@
+import glob
 """
 validate_compile.py — QuestaSim compile + parse errors
 fix_errors.py       — LLM error fixer with signature cache
@@ -40,9 +41,18 @@ def validate_compile(output_dir: str, proto_spec: dict) -> list:
     subprocess.run(['vlib', 'work'], cwd=sim_dir, capture_output=True)
 
     errors = []
+    # Find all RTL files in rtl/ directory
+    rtl_dir = os.path.join(os.path.dirname(sim_dir), 'rtl')
+    rtl_files = sorted(glob.glob(os.path.join(rtl_dir, '*.sv')))
+    # pkg first, then everything else
+    pkg_files = [f for f in rtl_files if '_pkg.sv' in f]
+    other_rtl  = [f for f in rtl_files if '_pkg.sv' not in f]
+    # Make paths relative to sim_dir
+    def rel(p): return '../rtl/' + os.path.basename(p)
     compile_steps = [
-        ('all',    [f'../rtl/{name}_pkg.sv',
-                    f'../assertions/{name}_sva.sv',
+        ('all',    [rel(f) for f in pkg_files] +
+                   [rel(f) for f in other_rtl] +
+                   [f'../assertions/{name}_sva.sv',
                     f'{UVM_HOME}/uvm_pkg.sv',
                     f'../tb/{name}_if.sv',
                     f'../tb/{name}_tb_pkg.sv',
@@ -111,6 +121,11 @@ def fix_errors(errors: list, output_dir: str, proto_spec: dict, llm) -> bool:
 
     any_fixed = False
     for fname, file_errors in by_file.items():
+        # Skip package-not-found — always compile order, not a code fix
+        file_errors = [e for e in file_errors
+                      if 'not find the package' not in e.get('message','')]
+        if not file_errors:
+            continue
         # Find the actual file path
         fpath = _find_file(fname, output_dir)
         if not fpath or not os.path.exists(fpath):
@@ -134,7 +149,7 @@ def fix_errors(errors: list, output_dir: str, proto_spec: dict, llm) -> bool:
                 f"Error {err['code']}: {err['message']}\n{snippet}"
             )
 
-        context = '\n\n'.join(context_parts)
+        context = '\n\n'.join(context_parts)[:200]  # trim for opencode
         file_type = os.path.basename(fpath).split('_')[-1].replace('.sv', '')
 
         # Try LLM fix
@@ -252,24 +267,42 @@ def analyze_coverage(ucdb_path: str, output_dir: str) -> dict:
 
 
 def _parse_vcover_output(output: str) -> dict:
-    """Parse vcover -details output into structured dict."""
+    """Parse vcover output — extract DUT instance coverage."""
     cov = {
-        'Statements':  0.0,
-        'Branches':    0.0,
-        'Expressions': 0.0,
-        'Covergroups': 0.0,
-        'Assertions':  0.0,
-        'gaps': []
+        'stmts': 0.0, 'branches': 0.0, 'exprs': 0.0,
+        'covergroups': 0.0, 'assertions': 0.0, 'gaps': []
     }
 
-    for line in output.split('\n'):
-        # Look for coverage percentages
-        for metric in ['Statement', 'Branch', 'Expression', 'Covergroup', 'Assertion']:
-            if metric in line and '%' in line:
-                m = re.search(r'(\d+\.\d+)%', line)
-                if m:
-                    key = metric + 's' if not metric.endswith('s') else metric
-                    cov[key] = float(m.group(1))
+    # Find DUT instance block (skip tb_top and pkg instances)
+    lines = output.split('\n')
+    in_dut = False
+    for line in lines:
+        if '=== Instance:' in line:
+            in_dut = 'u_dut' in line or ('tb_top' not in line and 'tb_pkg' not in line and 'uvm' not in line.lower())
+        if not in_dut:
+            continue
+        # Parse metric lines
+        if 'Statements' in line and '%' in line:
+            m = re.search(r'(\d+\.\d+)%', line)
+            if m: cov['stmts'] = float(m.group(1))
+        elif 'Branches' in line and '%' in line:
+            m = re.search(r'(\d+\.\d+)%', line)
+            if m: cov['branches'] = float(m.group(1))
+        elif 'Expressions' in line and '%' in line:
+            m = re.search(r'(\d+\.\d+)%', line)
+            if m: cov['exprs'] = float(m.group(1))
+        elif 'FSM States' in line and '%' in line:
+            m = re.search(r'(\d+\.\d+)%', line)
+            if m: cov['assertions'] = float(m.group(1))  # reuse assertions slot for FSM
+        # Covergroups come from tb_pkg — find separately
+    
+    # Get covergroup coverage from any instance
+    for line in lines:
+        if 'Covergroup' in line and '%' in line and '===' not in line:
+            m = re.search(r'(\d+\.\d+)%', line)
+            if m:
+                cov['covergroups'] = float(m.group(1))
+                break
 
         # Look for uncovered lines (0 hits)
         if ' 0 ' in line and ('line' in line.lower() or 'bin' in line.lower()):
@@ -344,7 +377,8 @@ def generate_test_sequences(proto_spec: dict, gaps: list, output_dir: str,
 
     for i, idea in enumerate(ideas):
         test_name = f"{name}_gen_iter{iteration}_{i+1}"
-        sv_code   = _idea_to_sv_sequence(idea, test_name, proto_spec, llm)
+        from gen_tests import _fallback_sequence
+        sv_code   = _fallback_sequence(test_name, idea, proto_spec)
         if sv_code:
             # Write to tb directory
             fpath = os.path.join(tb_dir, f'{test_name}.sv')
@@ -365,9 +399,25 @@ Generate {n} broad test ideas to verify this protocol.
 Ideas should cover basic and corner cases.
 Return a JSON array of {n} strings."""
     result = llm.call_json(prompt)
-    if isinstance(result, list):
+    if isinstance(result, list) and result:
         return result[:n]
-    return [f"Test idea {i+1} for {proto_spec['name']}" for i in range(n)]
+    # Protocol-agnostic fallback ideas based on transaction types
+    txns = proto_spec.get('transactions', [])
+    txn_names = [t.get('name','') for t in txns]
+    ideas = []
+    for txn in txn_names[:2]:
+        ideas.extend([
+            f"Send a basic {txn} transaction and verify response",
+            f"Send back-to-back {txn} transactions with back-pressure",
+            f"Send {txn} to boundary address and check response",
+        ])
+    if not ideas:
+        ideas = [
+            "Send a basic transaction and verify response",
+            "Apply back-pressure on response channel for 10 cycles",
+            "Send back-to-back transactions with random delays",
+        ]
+    return ideas[:n]
 
 
 def _llm_targeted_ideas(proto_spec, gaps, llm, n):
@@ -379,7 +429,15 @@ Uncovered gaps:
 Generate {n} test ideas specifically targeting these gaps.
 Return JSON array of {n} strings."""
     result = llm.call_json(prompt)
-    return result[:n] if isinstance(result, list) else []
+    if isinstance(result, list) and result:
+        return result[:n]
+    # Fallback ideas
+    name = proto_spec['name']
+    return [
+        f"Back-pressure: hold BREADY low for 20 cycles during write",
+        f"Read-after-write: write 0xDEADBEEF then read back same address",
+        f"Burst: send INCR burst of length 4 with random data",
+    ][:n]
 
 
 def _llm_whitebox_ideas(proto_spec, gaps, llm, n):
@@ -405,18 +463,13 @@ def _idea_to_sv_sequence(idea: str, test_name: str,
     for ch in proto_spec.get('channels', []):
         signals.extend(list(ch.get('signals', {}).keys())[:3])
 
-    prompt = f"""Protocol: {proto_spec['name']}
-Test idea: {idea}
-Sequence class name: {test_name}
-Base class: {name}_base_seq
-Seq item type: {name}_seq_item
-Available vif signals: {', '.join(signals[:8])}
-
-Write a complete SystemVerilog UVM sequence class implementing this test idea.
-Include: class declaration, `uvm_object_utils, new(), body() task.
-Use @(posedge vif.clk) not #delay (Rule 11).
-Min 2 transactions (Rule 10).
-Return ONLY the complete class definition."""
+    # Trim idea to avoid opencode timeout
+    short_idea = idea[:60] if len(idea) > 60 else idea
+    sig_str = ', '.join(signals[:4])
+    prompt = f"""Write UVM sequence class {test_name} extends {name}_base_seq.
+Seq item: {name}_seq_item. Test: {short_idea}.
+Use @(posedge vif.clk), min 2 transactions, `uvm_object_utils.
+Return ONLY class definition."""
 
     result = llm.call(prompt, max_tokens=600)
     if not result:

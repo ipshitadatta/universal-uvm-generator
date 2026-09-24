@@ -16,7 +16,7 @@ CHECKPOINT_BANNER = """
 ╚══════════════════════════════════════════════════════════╝"""
 
 
-def run_checkpoint(iteration, proto_spec, coverage_history, gaps, output_dir, llm):
+def run_checkpoint(iteration, proto_spec, coverage_history, gaps, output_dir, llm, exclusions=None, final=False):
     """
     Run interactive checkpoint.
     Returns: (user_ideas, approved_exclusions)
@@ -26,8 +26,8 @@ def run_checkpoint(iteration, proto_spec, coverage_history, gaps, output_dir, ll
 
     # 1. Print full coverage report
     if coverage_history:
-        curr = coverage_history[-1]['coverage']
-        prev = coverage_history[0]['coverage'] if len(coverage_history) > 1 else {}
+        curr = coverage_history[-1] if coverage_history else {}
+        prev = coverage_history[0] if len(coverage_history) > 1 else {}
         print(f"\n  Protocol:  {proto_spec['name']}")
         print(f"  Coverage trajectory:")
         print(f"  {'Metric':<15} {'Current':>8}  {'Start':>8}  {'Delta':>8}")

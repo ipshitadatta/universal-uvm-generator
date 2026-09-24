@@ -184,3 +184,21 @@ def strip_markdown_fences(content: str) -> str:
     content = re.sub(r"```\w*\n?", "", content)
     content = re.sub(r"```", "", content)
     return content
+
+
+def dedup_properties(content: str) -> str:
+    """Remove duplicate SVA property/assert declarations."""
+    import re
+    seen = set()
+    lines = content.split("\n")
+    cleaned = []
+    for line in lines:
+        m = re.match(r"\s*(property|a_\w+:|c_\w+:)\s+(\w+)", line)
+        if m:
+            name = m.group(2)
+            if name in seen:
+                cleaned.append(f"  // [REMOVED DUPLICATE: {name}]")
+                continue
+            seen.add(name)
+        cleaned.append(line)
+    return "\n".join(cleaned)

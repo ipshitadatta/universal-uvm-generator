@@ -164,6 +164,114 @@ def _get_example_sequence(proto_spec: dict) -> str:
 
 
 def _fallback_sequence(test_name: str, idea: str, proto_spec: dict) -> str:
+    name = proto_spec['sv_name']
+    idea_short = idea[:60].replace('"', "'")
+    txns = proto_spec.get('transactions', [])
+    
+    # Pick transaction type based on idea keywords
+    idea_lower = idea.lower()
+    resp_keywords = ['read','receive','response','slave-to-master','reply']
+    init_keywords = ['write','send','request','master-to-slave','drive','assert']
+    
+    # Find which transaction names match the idea
+    matched_txn = None
+    for txn in txns:
+        tname = txn.get('name','').lower()
+        if any(k in idea_lower for k in [tname]):
+            matched_txn = txn['name']
+            break
+    
+    # If no match, pick first txn that matches idea direction
+    if not matched_txn:
+        if any(k in idea_lower for k in resp_keywords) and not any(k in idea_lower for k in init_keywords):
+            # Response/read-type — pick last transaction (often read)
+            matched_txn = txns[-1]['name'] if txns else 'default'
+        else:
+            matched_txn = txns[0]['name'] if txns else 'default'
+    
+    # Build constraint based on transaction fields
+    # Use is_write if it exists, otherwise use rand fields
+    has_is_write = 'is_write' in proto_spec.get('seq_item_fields', [])
+    
+    if 'is_write' in idea_lower or any(k in idea_lower for k in resp_keywords):
+        is_write_val = '0'
+    else:
+        is_write_val = '1'
+    
+    constraint_block = f"is_write == {is_write_val};" if matched_txn in ['read','write'] else ""
+    
+    return f"""
+class {test_name} extends {name}_base_seq;
+  `uvm_object_utils({test_name})
+  function new(string name="{test_name}"); super.new(name); endfunction
+  // Test idea: {idea_short}
+  task body();
+    {name}_seq_item pkt;
+    repeat (4) begin
+      pkt = {name}_seq_item::type_id::create("pkt");
+      start_item(pkt);
+      if (!pkt.randomize()) `uvm_fatal("RAND","randomize failed")
+      finish_item(pkt);
+    end
+    repeat(10) @(posedge $root.tb_top.clk);
+  endtask
+endclass
+"""
+    _orig_idea = idea  # kept for reference
+    name = proto_spec['sv_name']
+    idea_short = idea[:60].replace('"', "'")
+    txns = proto_spec.get('transactions', [])
+    
+    # Pick transaction type based on idea keywords
+    idea_lower = idea.lower()
+    resp_keywords = ['read','receive','response','slave-to-master','reply']
+    init_keywords = ['write','send','request','master-to-slave','drive','assert']
+    
+    # Find which transaction names match the idea
+    matched_txn = None
+    for txn in txns:
+        tname = txn.get('name','').lower()
+        if any(k in idea_lower for k in [tname]):
+            matched_txn = txn['name']
+            break
+    
+    # If no match, pick first txn that matches idea direction
+    if not matched_txn:
+        if any(k in idea_lower for k in resp_keywords) and not any(k in idea_lower for k in init_keywords):
+            # Response/read-type — pick last transaction (often read)
+            matched_txn = txns[-1]['name'] if txns else 'default'
+        else:
+            matched_txn = txns[0]['name'] if txns else 'default'
+    
+    # Build constraint based on transaction fields
+    # Use is_write if it exists, otherwise use rand fields
+    has_is_write = 'is_write' in proto_spec.get('seq_item_fields', [])
+    
+    if 'is_write' in idea_lower or any(k in idea_lower for k in resp_keywords):
+        is_write_val = '0'
+    else:
+        is_write_val = '1'
+    
+    constraint_block = f"is_write == {is_write_val};" if matched_txn in ['read','write'] else ""
+    
+    return f"""
+class {test_name} extends {name}_base_seq;
+  `uvm_object_utils({test_name})
+  function new(string name="{test_name}"); super.new(name); endfunction
+  // Test idea: {idea_short}
+  task body();
+    {name}_seq_item pkt;
+    repeat (4) begin
+      pkt = {name}_seq_item::type_id::create("pkt");
+      start_item(pkt);
+      if (!pkt.randomize()) `uvm_fatal("RAND","randomize failed")
+      finish_item(pkt);
+    end
+    repeat(10) @(posedge $root.tb_top.clk);
+  endtask
+endclass
+"""
+    _orig_idea = idea  # kept for reference
     """
     Rule-based fallback if LLM fails 3 attempts.
     Generates a minimal valid sequence from protocol spec directly.
