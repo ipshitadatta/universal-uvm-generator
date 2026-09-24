@@ -423,7 +423,7 @@ def _fallback_driver_body(proto_spec: dict) -> str:
             continue
         for sig, info in ch.get('signals', {}).items():
             if info.get('role') == 'valid':
-                lines.append(f"      vif.{sig.lower()} <= 1'b1;")
+                lines.append(f"      vif.{sig.lower()} <= req.{sig.lower()};")
     lines += [
         "      // Wait for ready with timeout",
         "      while (timeout < 200) begin",

@@ -33,6 +33,7 @@ cov_history = []
 all_gaps = []
 all_tests = []
 all_exclusions = []
+os.makedirs(os.path.join(output_dir,'sim','regress_logs'), exist_ok=True)
 
 print("\n[ITER 0] Baseline...")
 run_simulation(output_dir, proto_spec, 'axi4_slave_sanity_test', seed=1, iter_num=0)

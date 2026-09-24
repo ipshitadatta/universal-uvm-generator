@@ -2,3 +2,5 @@ output/
 __pycache__/
 *.pyc
 src/config.py
+src/config.py
+src/config.py~

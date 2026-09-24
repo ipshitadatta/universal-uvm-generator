@@ -166,9 +166,44 @@ def gen_sva(proto_spec: dict, output_dir: str, llm) -> str:
             else:
                 all_sigs.append(f"  input logic [{w}-1:0]     {sig_name.lower()}")
 
-    ports_sv = ',\n'.join(all_sigs)
-
     properties = _gen_sva_properties(proto_spec, llm)
+
+    # The LLM may reference protocol signals that were not listed in the
+    # channel config (e.g. ancillary AXI4 signals such as wlast/rvalid).
+    # Undeclared identifiers in the property bodies make QuestaSim fail with
+    # vlog-2163 ("Macro `wlast is undefined"), so scan the generated property
+    # text and declare every referenced signal that is not yet a module input.
+    _sv_keywords = frozenset("""assert always always_comb always_ff always_latch and assign
+        assume automatic begin bind bit break byte case casex casez checker class clocking
+        const constraint continue cover covergroup coverpoint cross default defparam design
+        disable dist do edge else end endcase endchecker endclass endclocking endconfig
+        endfunction endgenerate endgroup endinterface endmodule endpackage endprogram
+        endproperty endsequence endtable endtask enum event eventually expect export extends
+        extern final first_match for foreach forever fork function generate genvar global
+        highz0 highz1 if iff ignore_bins illegal_bins import inout input inside int integer
+        interface intersect join join_any join_none let localparam logic longint macromodule
+        matches medium modport module nand negedge nettype new nexttime nmos nor not notif0
+        notif1 null or output packed parameter pmos posedge primitive priority program
+        property protected pulldown pullup pure rand randc randcase randsequence real
+        realtime ref reg reject_on release repeat restrict return s_always s_eventually
+        s_nexttime s_until s_until_with scalared sequence shortint shortreal signed small
+        soft solve specify specparam static string strong struct super supply0 supply1
+        sync_accept_on sync_reject_on table tagged task this throughout time timeprecision
+        timeunit tri tri0 tri1 triand trior trireg type typedef union unique unique0 unsigned
+        use uwire var vectored virtual void wait wait_order wand weak while wildcard wire with
+        within wor xnor xor""".split())
+
+    def _referenced_sigs(body):
+        body = re.sub(r'`[A-Za-z_]\w*', '', body)   # drop macro refs (e.g. `uvm_*)
+        body = re.sub(r'\$[A-Za-z_]\w*', '', body)  # drop $system calls
+        return {m for m in re.findall(r'\b[a-z_][a-z0-9_]*\b', body)
+                if m not in _sv_keywords}
+
+    declared = {s.split()[-1].lower() for s in all_sigs} | {'clk', 'rst_n'}
+    for sig in sorted(_referenced_sigs(properties) - declared):
+        all_sigs.append(f"  input logic               {sig}")
+
+    ports_sv = ',\n'.join(all_sigs)
 
     return f"""`ifndef {name.upper()}_SVA_SV
 `define {name.upper()}_SVA_SV

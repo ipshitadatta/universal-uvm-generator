@@ -211,7 +211,11 @@ def run_simulation(output_dir: str, proto_spec: dict,
         with open(log, 'w') as f:
             f.write(result.stdout + result.stderr)
 
-        if 'UVM_FATAL' in result.stdout or 'Error loading' in result.stdout:
+        # Check for actual failures — not just mentions of UVM_FATAL in log
+        stdout = result.stdout
+        has_fatal = ('UVM_FATAL :    0' not in stdout and 'UVM_FATAL' in stdout and 'UVM_FATAL :' not in stdout)
+        has_error = 'Error loading' in stdout
+        if has_fatal or has_error:
             return None
 
         return ucdb if os.path.exists(ucdb) else None
@@ -239,7 +243,7 @@ def merge_ucdb(output_dir: str) -> Optional[str]:
 
     cmd = ['vcover', 'merge', merged] + ucdb_files
     try:
-        subprocess.run(cmd, cwd=sim_dir, capture_output=True, timeout=60)
+        subprocess.run(cmd, cwd=sim_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         return merged if os.path.exists(merged) else None
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
@@ -311,6 +315,13 @@ def _parse_vcover_output(output: str) -> dict:
                 'category': _classify_gap(line),
                 'raw': line.strip()
             })
+        # Expression gaps — No hits pattern
+        if 'No hits' in line or ('***0***' in line):
+            cov['gaps'].append({
+                'description': line.strip()[:100],
+                'category': 'unreachable',
+                'raw': line.strip()
+            })
 
     return cov
 
@@ -318,6 +329,8 @@ def _parse_vcover_output(output: str) -> dict:
 def _classify_gap(line: str) -> str:
     """Classify coverage gap into category."""
     line_lower = line.lower()
+    if any(k in line_lower for k in ['rd_len', 'expression', 'no hits', 'nba', 'rhs']):
+        return 'unreachable'
     if any(k in line_lower for k in ['vip', 'bfm', 'protocol_', '_vip']):
         return 'vip_config'
     if any(k in line_lower for k in ['stall', 'backpressure', 'back_pressure', 'ready=0']):
@@ -332,10 +345,15 @@ def print_coverage_report(cov: dict, iter_num: int, prev: dict = None):
     if not cov:
         return
     print(f"\n  Coverage @ iter {iter_num}:")
+    key_map = {
+        'Statements': 'stmts', 'Branches': 'branches',
+        'Expressions': 'exprs', 'Covergroups': 'covergroups', 'Assertions': 'assertions'
+    }
     for metric in ['Statements', 'Branches', 'Expressions', 'Covergroups', 'Assertions']:
-        val  = cov.get(metric, 0.0)
+        key  = key_map[metric]
+        val  = cov.get(key, cov.get(metric, 0.0))
         if prev:
-            delta = val - prev.get(metric, 0.0)
+            delta = val - prev.get(key, prev.get(metric, 0.0))
             delta_s = f"  ({'+' if delta >= 0 else ''}{delta:.1f}%)"
         else:
             delta_s = ''

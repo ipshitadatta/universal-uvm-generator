@@ -32,9 +32,11 @@ def run_checkpoint(iteration, proto_spec, coverage_history, gaps, output_dir, ll
         print(f"  Coverage trajectory:")
         print(f"  {'Metric':<15} {'Current':>8}  {'Start':>8}  {'Delta':>8}")
         print(f"  {'-'*45}")
+        key_map = {'Statements':'stmts','Branches':'branches','Expressions':'exprs','Covergroups':'covergroups','Assertions':'assertions'}
         for metric in ['Statements', 'Branches', 'Expressions', 'Covergroups', 'Assertions']:
-            curr_val = curr.get(metric, 0.0)
-            prev_val = prev.get(metric, 0.0)
+            key = key_map[metric]
+            curr_val = curr.get(key, curr.get(metric, 0.0))
+            prev_val = prev.get(key, prev.get(metric, 0.0))
             delta = curr_val - prev_val
             delta_str = f"+{delta:.1f}%" if delta >= 0 else f"{delta:.1f}%"
             print(f"  {metric:<15} {curr_val:>7.1f}%  {prev_val:>7.1f}%  {delta_str:>8}")
