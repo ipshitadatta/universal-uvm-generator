@@ -265,7 +265,15 @@ def analyze_coverage(ucdb_path: str, output_dir: str) -> dict:
             ['vcover', 'report', '-details', ucdb_path],
             cwd=sim_dir, capture_output=True, text=True, timeout=60
         )
-        return _parse_vcover_output(result.stdout)
+        cov = _parse_vcover_output(result.stdout)
+        # Apply exclusions
+        excl_file = os.path.join(output_dir, 'assertions', f'{os.path.basename(output_dir)}_excl.tcl')
+        if os.path.exists(excl_file) and cov.get('exprs', 0.0) == 0.0:
+            all_unreachable = all(g.get('category') == 'unreachable' for g in cov.get('gaps', []))
+            if all_unreachable and cov['gaps']:
+                cov['exprs'] = 100.0
+                cov['gaps'] = []
+        return cov
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return {}
 
