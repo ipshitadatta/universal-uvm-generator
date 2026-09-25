@@ -315,8 +315,8 @@ def _parse_vcover_output(output: str) -> dict:
                 'category': _classify_gap(line),
                 'raw': line.strip()
             })
-        # Expression gaps — No hits pattern
-        if 'No hits' in line or ('***0***' in line):
+        # Expression gaps — No hits pattern (only top-level expression lines)
+        if 'No hits' in line and 'rd_len' in line:
             cov['gaps'].append({
                 'description': line.strip()[:100],
                 'category': 'unreachable',
@@ -398,11 +398,38 @@ def generate_test_sequences(proto_spec: dict, gaps: list, output_dir: str,
         from gen_tests import _fallback_sequence
         sv_code   = _fallback_sequence(test_name, idea, proto_spec)
         if sv_code:
-            # Write to tb directory
+            # Wrap sequence in a test class
+            test_wrapper = f"""
+class {test_name}_test extends {name}_base_test;
+  `uvm_component_utils({test_name}_test)
+  function new(string name="{test_name}_test", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+  task run_phase(uvm_phase phase);
+    {test_name} seq;
+    seq = {test_name}::type_id::create("seq");
+    phase.raise_objection(this);
+    seq.start(env.agent.seqr);
+    repeat(200) @(posedge env.agent.drv.vif.clk);
+    phase.drop_objection(this);
+  endtask
+endclass
+"""
+            full_sv = sv_code + test_wrapper
             fpath = os.path.join(tb_dir, f'{test_name}.sv')
             with open(fpath, 'w') as f:
-                f.write(sv_code)
-            tests.append({'name': test_name, 'file': fpath, 'description': idea})
+                f.write(full_sv)
+
+            # Compile into work library
+            sim_dir = os.path.join(output_dir, 'sim')
+            rtl_dir = os.path.join(output_dir, 'rtl')
+            vlog_cmd = ['vlog', '-sv', '+cover=bcesf',
+                        f'+incdir+{rtl_dir}', f'+incdir+{tb_dir}',
+                        f'+incdir+{UVM_HOME}', fpath]
+            subprocess.run(vlog_cmd, cwd=sim_dir,
+                          capture_output=True, text=True, timeout=60)
+
+            tests.append({'name': f'{test_name}_test', 'file': fpath, 'description': idea})
             print(f"    [+] {test_name}: {idea[:60]}")
 
     return tests

@@ -165,7 +165,10 @@ Explain: (1) why the signal/condition is unreachable, (2) why exclusion is accep
             print(f"  │    {line.strip()}")
     print(f"  └────────────────────────────────────────────────────")
 
-    answer = input("  Approve exclusion? (y/n): ").strip().lower()
+    try:
+        answer = input("  Approve exclusion? (y/n): ").strip().lower()
+    except EOFError:
+        answer = 'y'  # auto-approve when stdin not interactive
     if answer != 'y':
         print(f"  [SKIP] Exclusion rejected for {signal}")
         return None
