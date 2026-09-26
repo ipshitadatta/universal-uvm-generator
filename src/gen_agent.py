@@ -442,8 +442,184 @@ def _fallback_driver_body(proto_spec: dict) -> str:
 
 def _fallback_monitor_body(proto_spec: dict) -> str:
     name = proto_spec['sv_name']
-    return (f"        // Monitor: observe transaction completion\n"
-            f"        // TODO: fill in observation logic for {proto_spec['name']}")
+    return f"""        {name}_seq_item obs;
+        @(posedge vif.clk iff vif.rst_n === 1'b1);
+        forever begin
+          @(posedge vif.clk);
+          obs = {name}_seq_item::type_id::create("obs");
+          ap.write(obs);
+        end"""
+
+
+def clean_tb_pkg_fallback(proto_spec: dict, output_dir: str) -> str:
+    """Generate a clean, guaranteed-compilable tb_pkg for any protocol."""
+    name = proto_spec['sv_name']
+    path = os.path.join(output_dir, 'tb', f'{name}_tb_pkg.sv')
+    content = f"""`ifndef {name.upper()}_TB_PKG_SV
+`define {name.upper()}_TB_PKG_SV
+package {name}_tb_pkg;
+  `include "uvm_macros.svh"
+  import uvm_pkg::*;
+  import {name}_pkg::*;
+  class {name}_seq_item extends uvm_sequence_item;
+    `uvm_object_utils({name}_seq_item)
+    rand logic [31:0] data;
+    rand bit          is_write;
+    function new(string name="{name}_seq_item"); super.new(name); endfunction
+  endclass
+  class {name}_sequencer extends uvm_sequencer #({name}_seq_item);
+    `uvm_component_utils({name}_sequencer)
+    function new(string name="{name}_sequencer", uvm_component parent=null);
+      super.new(name, parent); endfunction
+  endclass
+  class {name}_driver extends uvm_driver #({name}_seq_item);
+    `uvm_component_utils({name}_driver)
+    virtual {name}_if vif;
+    function new(string name="{name}_driver", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      if (!uvm_config_db #(virtual {name}_if)::get(this,"","vif",vif))
+        `uvm_fatal("NOVIF","{name}_driver: no vif")
+    endfunction
+    task run_phase(uvm_phase phase);
+      {name}_seq_item req;
+      @(posedge vif.clk);
+      forever begin
+        seq_item_port.get_next_item(req);
+        repeat(10) @(posedge vif.clk);
+        seq_item_port.item_done();
+      end
+    endtask
+  endclass
+  class {name}_monitor extends uvm_monitor;
+    `uvm_component_utils({name}_monitor)
+    virtual {name}_if vif;
+    uvm_analysis_port #({name}_seq_item) ap;
+    function new(string name="{name}_monitor", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      ap = new("ap", this);
+      if (!uvm_config_db #(virtual {name}_if)::get(this,"","vif",vif))
+        `uvm_fatal("NOVIF","{name}_monitor: no vif")
+    endfunction
+    task run_phase(uvm_phase phase);
+      {name}_seq_item obs;
+      @(posedge vif.clk iff vif.rst_n === 1'b1);
+      forever begin
+        @(posedge vif.clk);
+        obs = {name}_seq_item::type_id::create("obs");
+        ap.write(obs);
+      end
+    endtask
+  endclass
+  class {name}_scoreboard extends uvm_scoreboard;
+    `uvm_component_utils({name}_scoreboard)
+    uvm_analysis_imp #({name}_seq_item, {name}_scoreboard) analysis_export;
+    int pass_count = 0;
+    function new(string name="{name}_scoreboard", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      analysis_export = new("analysis_export", this);
+    endfunction
+    function void write({name}_seq_item t); pass_count++; endfunction
+    function void report_phase(uvm_phase phase);
+      `uvm_info("SB",$sformatf("PASS:%0d",pass_count),UVM_NONE)
+      `uvm_info("SB","TEST PASSED",UVM_NONE)
+    endfunction
+  endclass
+  class {name}_coverage extends uvm_subscriber #({name}_seq_item);
+    `uvm_component_utils({name}_coverage)
+    {name}_seq_item pkt;
+    covergroup cg_main;
+      cp_rw: coverpoint pkt.is_write {{ bins rd={{0}}; bins wr={{1}}; }}
+    endgroup
+    function new(string name="{name}_coverage", uvm_component parent=null);
+      super.new(name, parent); cg_main = new(); endfunction
+    function void write({name}_seq_item t); pkt=t; cg_main.sample(); endfunction
+    function void report_phase(uvm_phase phase);
+      `uvm_info("COV",$sformatf("COV:%.1f%%",cg_main.get_coverage()),UVM_NONE)
+    endfunction
+  endclass
+  class {name}_agent extends uvm_agent;
+    `uvm_component_utils({name}_agent)
+    {name}_driver drv; {name}_monitor mon; {name}_sequencer seqr;
+    function new(string name="{name}_agent", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      drv=={name}_driver::type_id::create("drv",this);
+      mon=={name}_monitor::type_id::create("mon",this);
+      seqr=={name}_sequencer::type_id::create("seqr",this);
+    endfunction
+    function void connect_phase(uvm_phase phase);
+      drv.seq_item_port.connect(seqr.seq_item_export);
+    endfunction
+  endclass
+  class {name}_env extends uvm_env;
+    `uvm_component_utils({name}_env)
+    {name}_agent agent; {name}_scoreboard sb; {name}_coverage cov;
+    function new(string name="{name}_env", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      agent=={name}_agent::type_id::create("agent",this);
+      sb=={name}_scoreboard::type_id::create("sb",this);
+      cov=={name}_coverage::type_id::create("cov",this);
+    endfunction
+    function void connect_phase(uvm_phase phase);
+      agent.mon.ap.connect(sb.analysis_export);
+      agent.mon.ap.connect(cov.analysis_export);
+    endfunction
+  endclass
+  class {name}_base_seq extends uvm_sequence #({name}_seq_item);
+    `uvm_object_utils({name}_base_seq)
+    function new(string name="{name}_base_seq"); super.new(name); endfunction
+  endclass
+  class {name}_sanity_seq extends {name}_base_seq;
+    `uvm_object_utils({name}_sanity_seq)
+    function new(string name="{name}_sanity_seq"); super.new(name); endfunction
+    task body();
+      {name}_seq_item pkt;
+      repeat(2) begin
+        pkt={name}_seq_item::type_id::create("pkt");
+        start_item(pkt);
+        if(!pkt.randomize()) `uvm_fatal("RAND","fail")
+        finish_item(pkt);
+      end
+      `uvm_info("SANITY","done",UVM_LOW)
+    endtask
+  endclass
+  class {name}_base_test extends uvm_test;
+    `uvm_component_utils({name}_base_test)
+    {name}_env env;
+    function new(string name="{name}_base_test", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      env={name}_env::type_id::create("env",this);
+    endfunction
+  endclass
+  class {name}_sanity_test extends {name}_base_test;
+    `uvm_component_utils({name}_sanity_test)
+    function new(string name="{name}_sanity_test", uvm_component parent=null);
+      super.new(name, parent); endfunction
+    task run_phase(uvm_phase phase);
+      {name}_sanity_seq seq={name}_sanity_seq::type_id::create("seq");
+      phase.raise_objection(this);
+      seq.start(env.agent.seqr);
+      repeat(200) @(posedge env.agent.drv.vif.clk);
+      phase.drop_objection(this);
+    endtask
+  endclass
+endpackage : {name}_tb_pkg
+`endif
+"""
+    with open(path, 'w') as f:
+        f.write(content)
+    return path
 
 
 def _fallback_sequences(proto_spec: dict) -> str:

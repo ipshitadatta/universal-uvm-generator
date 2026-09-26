@@ -91,8 +91,27 @@ def main():
         print(f"  Run: python3 run_loop.py")
 
     elif mode == 2:
-        print(f"\n  Mode 2: Generating behavioral DUT stub...")
-        print(f"  [Coming soon — DUT stub generation]")
+        print(f"\n  Mode 2: Generating behavioral DUT stub + UVM environment...")
+        sys.path.insert(0, 'src')
+        from gen_dut_stub import generate_dut_stub
+        from generate_uvm import generate_uvm_environment
+        print(f"  Generating UVM environment...")
+        files = generate_uvm_environment(proto_spec, output_dir, llm)
+        dut_path = generate_dut_stub(proto_spec, output_dir, llm)
+        if dut_path:
+            print(f"  ✦ DUT stub     → {os.path.relpath(dut_path, output_dir)}")
+        print(f"  Generated {len(files)+1} files")
+        # Auto-fix compile errors
+        from all_modules import validate_compile, fix_errors
+        print(f"  Validating compile...")
+        errors = validate_compile(output_dir, proto_spec)
+        if errors:
+            print(f"  Found {len(errors)} errors — auto-fixing...")
+            fix_errors(errors, output_dir, proto_spec, llm)
+            errors2 = validate_compile(output_dir, proto_spec)
+            print(f"  After fix: {len(errors2)} errors remaining")
+        else:
+            print(f"  Compile: Errors 0 ✅")
 
     print(f"\n  Done! Output: {output_dir}")
 

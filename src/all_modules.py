@@ -435,7 +435,7 @@ endclass
                         f'+incdir+{rtl_dir}', f'+incdir+{tb_dir}',
                         f'+incdir+{UVM_HOME}', fpath]
             subprocess.run(vlog_cmd, cwd=sim_dir,
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=120)
 
             tests.append({'name': f'{test_name}_test', 'file': fpath, 'description': idea})
             print(f"    [+] {test_name}: {idea[:60]}")
